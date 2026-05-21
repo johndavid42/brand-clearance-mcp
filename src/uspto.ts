@@ -1,135 +1,110 @@
 import type { TrademarkHit, TrademarkSearchResult, TrademarkStatus } from "./types.js";
 import { similarityScore, conflictLevel, normalizeBrandName } from "./similarity.js";
 
-// ── USPTO API ─────────────────────────────────────────────────────────────
-// USPTO Trademark Search API — official, free, no auth required.
-// https://developer.uspto.gov/api-catalog/trademark-search-api
-//
-// Primary endpoint: TMSEARCH full-text search
-// Fallback endpoint: IBD open data trademark application search
+// ── USPTO TMSEARCH — confirmed working endpoint ───────────────────────────
+// Discovered via browser DevTools on tmsearch.uspto.gov.
+// POST with Elasticsearch query body. Requires browser-style headers —
+// CloudFront blocks requests without Origin + Referer headers.
 
-const PRIMARY_URL   = "https://developer.uspto.gov/trademark/v1/marks";
-const FALLBACK_URL  = "https://developer.uspto.gov/ibd-api/v1/trademark/application";
+const TMSEARCH_URL = "https://tmsearch.uspto.gov/prod-stage-v1-0-0/tmsearch";
 
-interface UsptoMark {
-  markIdentification?: string;
-  markLiteralElements?: string;
-  trademarkOwner?: string | { partyName?: string }[];
-  statusCode?: string;
-  statusDate?: string;
-  filingDate?: string;
-  registrationDate?: string;
-  serialNumber?: string;
-  registrationNumber?: string;
-  goodsAndServices?: string;
-  internationalClassNumber?: string;
-  classifications?: Array<{ intClassNumber?: string; goodsServices?: string }>;
+// ── Confirmed response field names (from live Nike test) ──────────────────
+
+interface TmsearchSource {
+  wordmark?: string;
+  wordmarkPseudoText?: string;  // fallback mark name field
+  markDescription?: string;     // second fallback
+  ownerName?: string[];
+  filedDate?: string;
+  registrationDate?: string | null;
+  registrationId?: string;      // registration number
+  internationalClass?: string[];
+  goodsAndServices?: string[];
+  alive?: boolean;
 }
 
-interface UsptoIbdMark {
-  markLiteralElements?: string;
-  applicantName?: string;
-  statusCode?: string;
-  filingDate?: string;
-  registrationDate?: string;
-  serialNumber?: string;
-  registrationNumber?: string;
-  goodsAndServicesDescription?: string;
-  internationalClassNumber?: string;
+interface TmsearchHit {
+  id?: string;           // serial number
+  score?: number;
+  source?: TmsearchSource;
 }
 
-function parseStatus(code: string | undefined): TrademarkStatus {
-  if (!code) return "UNKNOWN";
-  const c = code.toUpperCase();
-  if (c.includes("REGISTERED") || c === "4" || c.startsWith("REG")) return "REGISTERED";
-  if (c.includes("LIVE") || c.includes("ACTIVE") || c === "3") return "LIVE";
-  if (c.includes("DEAD") || c.includes("ABANDON") || c.includes("CANCEL") || c === "6") return "DEAD";
-  if (c.includes("PEND") || c === "1" || c === "2") return "PENDING";
-  return "UNKNOWN";
-}
-
-function parseOwner(raw: string | { partyName?: string }[] | undefined): string | null {
-  if (!raw) return null;
-  if (typeof raw === "string") return raw.trim() || null;
-  if (Array.isArray(raw) && raw.length > 0) return raw[0].partyName?.trim() ?? null;
-  return null;
-}
-
-function buildHit(mark: UsptoMark | UsptoIbdMark, brandName: string, isIbd = false): TrademarkHit {
-  const name = ("markLiteralElements" in mark ? mark.markLiteralElements : mark.markLiteralElements) ?? "";
-  const score = similarityScore(brandName, name);
-
-  const goodsClass = isIbd
-    ? (mark as UsptoIbdMark).internationalClassNumber ?? null
-    : (() => {
-        const m = mark as UsptoMark;
-        if (m.classifications?.length) {
-          return m.classifications.map(c => c.intClassNumber).filter(Boolean).join(", ");
-        }
-        return m.internationalClassNumber ?? null;
-      })();
-
-  const goodsDesc = isIbd
-    ? (mark as UsptoIbdMark).goodsAndServicesDescription ?? null
-    : (() => {
-        const m = mark as UsptoMark;
-        if (m.classifications?.length) {
-          return m.classifications.map(c => c.goodsServices).filter(Boolean).join("; ") || null;
-        }
-        return m.goodsAndServices ?? null;
-      })();
-
-  return {
-    source: "USPTO",
-    mark_name: name,
-    similarity_score: score,
-    conflict_level: conflictLevel(score),
-    status: parseStatus(isIbd ? (mark as UsptoIbdMark).statusCode : (mark as UsptoMark).statusCode),
-    goods_class: goodsClass,
-    goods_description: goodsDesc ? goodsDesc.slice(0, 200) : null,
-    owner: isIbd ? ((mark as UsptoIbdMark).applicantName ?? null) : parseOwner((mark as UsptoMark).trademarkOwner),
-    serial_number: mark.serialNumber ?? null,
-    registration_number: mark.registrationNumber ?? null,
-    filed_date: mark.filingDate ?? null,
-    registration_date: mark.registrationDate ?? null,
-    jurisdiction: "US",
+interface TmsearchResponse {
+  hits?: {
+    totalValue?: number;
+    hits?: TmsearchHit[];
   };
 }
 
-// ── Primary search ────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────
 
-async function searchPrimary(name: string, rows: number): Promise<UsptoMark[]> {
-  const params = new URLSearchParams({
-    query: name,
-    rows: String(rows),
-    start: "0",
-  });
-  const url = `${PRIMARY_URL}?${params}`;
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(10_000),
-    headers: { Accept: "application/json" },
-  });
-  if (!res.ok) throw new Error(`USPTO primary HTTP ${res.status}`);
-  const data = await res.json() as { marks?: UsptoMark[]; trademarks?: UsptoMark[] };
-  return data.marks ?? data.trademarks ?? [];
+function parseAlive(alive: boolean | undefined, goodsAndServices: string[] | undefined): TrademarkStatus {
+  if (alive === true)  return "LIVE";
+  if (alive === false) return "DEAD";
+  // Fallback: check goods description for "(ABANDONED)" prefix
+  if (goodsAndServices?.some(g => /^\(ABANDONED\)/i.test(g))) return "DEAD";
+  return "UNKNOWN";
 }
 
-// ── Fallback IBD search ───────────────────────────────────────────────────
+function parseOwner(ownerName: string[] | undefined): string | null {
+  if (!ownerName?.length) return null;
+  // Strip the parenthetical: "Nike, Inc. (CORPORATION; OREGON, USA)" → "Nike, Inc."
+  return ownerName[0].replace(/\s*\([^)]+\)\s*$/, "").trim() || null;
+}
 
-async function searchFallback(name: string, rows: number): Promise<UsptoIbdMark[]> {
-  const params = new URLSearchParams({
-    searchPhrase: name,
-    rows: String(rows),
-    start: "0",
+function parseClass(intlClass: string[] | undefined): string | null {
+  if (!intlClass?.length) return null;
+  // "IC 014" → "014", join multiples
+  return intlClass.map(c => c.replace(/^IC\s*/i, "").trim()).join(", ");
+}
+
+function parseGoods(goodsAndServices: string[] | undefined): string | null {
+  if (!goodsAndServices?.length) return null;
+  // Strip leading status prefix e.g. "(ABANDONED) IC 014: " → actual goods description
+  const cleaned = goodsAndServices
+    .map(g => g.replace(/^\([^)]+\)\s*IC\s*\d+:\s*/i, "").trim())
+    .filter(Boolean)
+    .join("; ");
+  return cleaned.slice(0, 300) || null;
+}
+
+// ── ES query builder — matches tmsearch.uspto.gov portal behaviour ─────────
+
+function buildQuery(term: string, size: number): string {
+  const q = term.toLowerCase();
+  return JSON.stringify({
+    query: {
+      bool: {
+        must: [{
+          bool: {
+            should: [
+              { match_phrase: { WM: { query: q, boost: 5 } } },
+              { match:        { WM: { query: q, boost: 2 } } },
+              { match_phrase: { PM: { query: q, boost: 2 } } },
+            ],
+          },
+        }],
+      },
+    },
+    // Use 100 like the portal — some exact marks appear further down the
+    // relevance list when there are many compound marks containing the term
+    size: Math.max(size, 100),
+    from: 0,
+    track_total_hits: true,
+    _source: [
+      "wordmark",
+      "wordmarkPseudoText", // fallback — some marks only populate this field
+      "markDescription",    // second fallback for design marks
+      "ownerName",
+      "filedDate",
+      "registrationDate",
+      "registrationId",
+      "internationalClass",
+      "goodsAndServices",
+      "alive",
+      "id",
+    ],
   });
-  const url = `${FALLBACK_URL}?${params}`;
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(10_000),
-    headers: { Accept: "application/json" },
-  });
-  if (!res.ok) throw new Error(`USPTO fallback HTTP ${res.status}`);
-  const data = await res.json() as { results?: { trademarks?: UsptoIbdMark[] }; trademarks?: UsptoIbdMark[] };
-  return data.results?.trademarks ?? data.trademarks ?? [];
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -139,20 +114,50 @@ export async function searchUsptoTrademarks(
   rows = 20,
 ): Promise<TrademarkSearchResult> {
   try {
-    let hits: TrademarkHit[] = [];
+    const res = await fetch(TMSEARCH_URL, {
+      method: "POST",
+      signal: AbortSignal.timeout(12_000),
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://tmsearch.uspto.gov",
+        "Referer": "https://tmsearch.uspto.gov/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      },
+      body: buildQuery(brandName, rows),
+    });
 
-    try {
-      const marks = await searchPrimary(brandName, rows);
-      hits = marks.map(m => buildHit(m, brandName, false));
-    } catch {
-      // Primary failed — try IBD fallback
-      const marks = await searchFallback(brandName, rows);
-      hits = marks.map(m => buildHit(m, brandName, true));
-    }
+    if (!res.ok) throw new Error(`USPTO TMSEARCH HTTP ${res.status}`);
 
-    // Filter to only meaningful similarity (>= 40%) and sort by score desc
+    const data = await res.json() as TmsearchResponse;
+    const raw  = data.hits?.hits ?? [];
+
+    const hits: TrademarkHit[] = raw.map(hit => {
+      const src  = hit.source ?? {};
+      // wordmark is the primary field; some records only populate wordmarkPseudoText
+      const name = src.wordmark || src.wordmarkPseudoText || src.markDescription || "";
+      const score = similarityScore(brandName, name);
+      return {
+        source:              "USPTO",
+        mark_name:           name,
+        similarity_score:    score,
+        conflict_level:      conflictLevel(score),
+        status:              parseAlive(src.alive, src.goodsAndServices),
+        goods_class:         parseClass(src.internationalClass),
+        goods_description:   parseGoods(src.goodsAndServices),
+        owner:               parseOwner(src.ownerName),
+        serial_number:       hit.id ?? null,
+        registration_number: src.registrationId ?? null,
+        filed_date:          src.filedDate ?? null,
+        registration_date:   src.registrationDate ?? null,
+        jurisdiction:        "US",
+      };
+    });
+
     const filtered = hits
-      .filter(h => h.similarity_score >= 40 || normalizeBrandName(h.mark_name) === normalizeBrandName(brandName))
+      .filter(h => h.similarity_score >= 40 ||
+        normalizeBrandName(h.mark_name) === normalizeBrandName(brandName))
       .sort((a, b) => b.similarity_score - a.similarity_score)
       .slice(0, rows);
 

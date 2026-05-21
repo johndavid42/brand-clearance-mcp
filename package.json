@@ -13,6 +13,7 @@
   "dependencies": {
     "@ctxprotocol/sdk": "latest",
     "@modelcontextprotocol/sdk": "latest",
+    "dotenv": "^17.4.2",
     "express": "^4.18.2"
   },
   "devDependencies": {

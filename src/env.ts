@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 export const ENV = {
   PORT: (() => {
     const raw = process.env.PORT ?? "3000";

@@ -19,7 +19,7 @@ This MCP returns the factual clearance data that attorneys and founders currentl
 | Signal | Source | Auth |
 |---|---|---|
 | US trademarks | USPTO open data API + IBD fallback | None |
-| EU trademarks | EUIPO eSearch Plus REST API | None |
+| EU trademarks | EUIPO Trademark Search API v1.1.0 (dev.euipo.europa.eu) | OAuth2 client_credentials — free registration, production requires ID docs |
 | Domain availability | ICANN RDAP (7 TLDs) | None |
 | Typosquat exposure | Custom permutation engine + RDAP | None |
 | Company registrations | OpenCorporates (global) | None |
@@ -85,7 +85,18 @@ curl -s -X POST http://localhost:3000/mcp \
 |---|---|---|
 | `PORT` | No (default: 3000) | Server port |
 | `NODE_ENV` | No (default: development) | Environment |
+| `EUIPO_CLIENT_ID` | No | Client ID from your registered app at dev.euipo.europa.eu. Without this, EU trademark search is skipped. |
+| `EUIPO_CLIENT_SECRET` | No | Client secret from your registered app. |
+| `EUIPO_SANDBOX` | No | Set to `"true"` to use sandbox environment during development. Sandbox returns test data only — use production for real trademark searches. |
 | `COMPANIES_HOUSE_API_KEY` | No | Free key from [Companies House developer portal](https://developer.company-information.service.gov.uk/). If absent, UK company search is skipped; OpenCorporates still runs. |
+
+### Setting up EUIPO access
+
+1. Register a free account at `https://euipo.europa.eu/ohimportal/en/web/guest/login?loginmode=register`
+2. Log into `https://dev.euipo.europa.eu` and register an application under Apps
+3. Subscribe to **Trademark search 1.1.0** — sandbox approval is immediate, production requires submitting ID documents to `docs.apiplatform@euipo.europa.eu`
+4. Set `EUIPO_CLIENT_ID` and `EUIPO_CLIENT_SECRET` from your registered app
+5. Set `EUIPO_SANDBOX=true` during development; remove it for production
 
 ## Deploy
 

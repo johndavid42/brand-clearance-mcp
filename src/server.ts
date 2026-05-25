@@ -104,6 +104,7 @@ app.use((req, _res, next) => {
   next();
 });
 
+app.use("/mcp", createContextMiddleware());
 
 // ── SSE sessions ───────────────────────────────────────────────────────────
 

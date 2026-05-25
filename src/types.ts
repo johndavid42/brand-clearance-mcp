@@ -85,7 +85,7 @@ export interface TyposquatDomain {
 // ── Company registrations ─────────────────────────────────────────────────
 
 export interface CompanyRegistration {
-  source: "companies_house" | "opencorporates";
+  source: "companies_house" | "gleif";
   name: string;
   similarity_score: number;       // 0–100
   jurisdiction: string;

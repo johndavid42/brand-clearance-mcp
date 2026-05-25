@@ -13,6 +13,6 @@ export const ENV = {
   NODE_ENV: (process.env.NODE_ENV ?? "development") as "development" | "production" | "test",
 
   // Optional: free key from https://developer.company-information.service.gov.uk/
-  // If absent, Companies House lookups are skipped; OpenCorporates still runs.
+  // If absent, Companies House lookups are skipped. GLEIF (global) always runs.
   COMPANIES_HOUSE_API_KEY: process.env.COMPANIES_HOUSE_API_KEY ?? null,
 };

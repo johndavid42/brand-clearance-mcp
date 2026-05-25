@@ -48,7 +48,15 @@ const LEGAL_SUFFIXES = [
 ];
 
 export function normalizeBrandName(name: string): string {
-  let n = name.toLowerCase().trim();
+  let n = name
+    // NFD decomposition splits accented chars into base + combining mark
+    // e.g. "é" → "e" + U+0301 combining acute
+    .normalize("NFD")
+    // Strip combining diacritical marks (U+0300–U+036F)
+    // So "Café" → "Cafe", "Müller" → "Muller", "Ñoño" → "Nono"
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
   // Strip legal suffixes
   for (const pat of LEGAL_SUFFIXES) n = n.replace(pat, "");
   // Strip punctuation except hyphens
@@ -67,6 +75,26 @@ export function conflictLevel(score: number): ConflictLevel {
   return "LOW";
 }
 
+// ── Nice class re-weighting ───────────────────────────────────────────────
+// If the caller knows their target Nice class (goods/services classification),
+// downgrade the conflict level of hits in unrelated classes by one step.
+// A "LUMINARY" trademark in class 25 (clothing) is lower risk for a SaaS
+// product (class 42) than a hit in class 42 directly.
+
+const CLASS_DOWNGRADE: Record<ConflictLevel, ConflictLevel> = {
+  EXACT: "HIGH", HIGH: "MEDIUM", MEDIUM: "LOW", LOW: "LOW",
+};
+
+function applyNiceClassFilter(hits: TrademarkHit[], niceClass: number): TrademarkHit[] {
+  const classStr = niceClass.toString().padStart(3, "0");
+  return hits.map(h => {
+    if (!h.goods_class) return h;
+    const classes = h.goods_class.split(",").map(c => c.trim());
+    if (classes.includes(classStr)) return h;
+    return { ...h, conflict_level: CLASS_DOWNGRADE[h.conflict_level] };
+  });
+}
+
 // ── Overall risk score ────────────────────────────────────────────────────
 
 export function computeOverallRisk(
@@ -74,12 +102,17 @@ export function computeOverallRisk(
   registeredDomains: DomainRegistration[],
   typosquats: TyposquatDomain[],
   companyHits: CompanyRegistration[],
+  niceClass?: number,
 ): { score: RiskLevel; factors: RiskFactor[]; summary: string } {
   const factors: RiskFactor[] = [];
 
+  const effectiveHits = niceClass !== undefined
+    ? applyNiceClassFilter(trademarkHits, niceClass)
+    : trademarkHits;
+
   // ── Trademark risk ───────────────────────────────────────────────────────
-  const exactOrHigh = trademarkHits.filter(h => h.conflict_level === "EXACT" || h.conflict_level === "HIGH");
-  const medium      = trademarkHits.filter(h => h.conflict_level === "MEDIUM");
+  const exactOrHigh = effectiveHits.filter(h => h.conflict_level === "EXACT" || h.conflict_level === "HIGH");
+  const medium      = effectiveHits.filter(h => h.conflict_level === "MEDIUM");
   const liveExactOrHigh = exactOrHigh.filter(h => h.status === "LIVE" || h.status === "REGISTERED");
 
   if (liveExactOrHigh.length > 0) {

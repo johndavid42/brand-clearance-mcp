@@ -30,7 +30,7 @@ async function handleTool(name: string, args: Record<string, unknown>) {
 
   switch (name) {
     case "check_brand_clearance":
-      return runBrandClearance(brandName);
+      return runBrandClearance(brandName, args.nice_class as number | undefined);
 
     case "search_trademarks": {
       const report = await getTrademarkHits(brandName);
@@ -103,7 +103,6 @@ app.use((req, _res, next) => {
   next();
 });
 
-app.use("/mcp", createContextMiddleware());
 
 // ── SSE sessions ───────────────────────────────────────────────────────────
 

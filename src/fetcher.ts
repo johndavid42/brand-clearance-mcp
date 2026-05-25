@@ -19,11 +19,14 @@ export function sanitizeBrandName(raw: string): string {
 
 // ── Main clearance fetch ──────────────────────────────────────────────────
 
-export async function runBrandClearance(rawName: string): Promise<BrandClearanceReport> {
+export async function runBrandClearance(rawName: string, niceClass?: number): Promise<BrandClearanceReport> {
   const brand    = sanitizeBrandName(rawName);
-  const cacheKey = normalizeBrandName(brand);
+  const baseKey  = normalizeBrandName(brand);
 
-  if (!cacheKey || cacheKey.length < 2) throw new Error(`Brand name too short or invalid: "${rawName}"`);
+  if (!baseKey || baseKey.length < 2) throw new Error(`Brand name too short or invalid: "${rawName}"`);
+
+  // Include nice_class in cache key so different class queries don't share cached results
+  const cacheKey = niceClass !== undefined ? `${baseKey}:nc${niceClass}` : baseKey;
 
   const cached = cache.get(cacheKey);
   if (cached) return cached;
@@ -51,11 +54,12 @@ export async function runBrandClearance(rawName: string): Promise<BrandClearance
     domainResult.checked_domains,
     typosquatResult,
     companyResult.registrations,
+    niceClass,
   );
 
   const report: BrandClearanceReport = {
     brand_name:             brand,
-    normalized_name:        cacheKey,
+    normalized_name:        baseKey,
     conflict_risk_score:    score,
     conflict_summary:       summary,
     trademark_hits:         allTrademarkHits,

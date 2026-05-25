@@ -85,7 +85,7 @@ const CLASS_DOWNGRADE: Record<ConflictLevel, ConflictLevel> = {
   EXACT: "HIGH", HIGH: "MEDIUM", MEDIUM: "LOW", LOW: "LOW",
 };
 
-function applyNiceClassFilter(hits: TrademarkHit[], niceClass: number): TrademarkHit[] {
+export function applyNiceClassFilter(hits: TrademarkHit[], niceClass: number): TrademarkHit[] {
   const classStr = niceClass.toString().padStart(3, "0");
   return hits.map(h => {
     if (!h.goods_class) return h;

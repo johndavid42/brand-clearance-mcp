@@ -33,8 +33,9 @@ async function handleTool(name: string, args: Record<string, unknown>) {
       return runBrandClearance(brandName, args.nice_class as number | undefined);
 
     case "search_trademarks": {
-      const report = await getTrademarkHits(brandName);
+      const niceClass   = args.nice_class as number | undefined;
       const jurisdiction = (args.jurisdiction ?? "both") as string;
+      const report      = await getTrademarkHits(brandName, niceClass);
       if (jurisdiction === "us") {
         report.trademark_hits = report.trademark_hits.filter(h => h.source === "USPTO");
       } else if (jurisdiction === "eu") {

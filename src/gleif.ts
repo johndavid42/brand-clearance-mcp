@@ -7,7 +7,7 @@
 // Replaces OpenCorporates (paid enterprise only) as the global company search source.
 
 import type { CompanyRegistration, CompanySearchResult } from "./types.js";
-import { similarityScore } from "./similarity.js";
+import { similarityScore, normalizeBrandName } from "./similarity.js";
 
 const GLEIF_BASE = "https://api.gleif.org/api/v1";
 
@@ -123,12 +123,23 @@ export async function searchGleifCompanies(
         const entity = record.attributes.entity;
         const reg    = record.attributes.registration;
         const name   = entity.legalName.name;
+
+        let score = similarityScore(brandName, name);
+
+        // Prefix boost: "Luminary Real Estate LLC" → normalizes to "luminaryrealestate"
+        // which starts with "luminary". Pure Levenshtein penalizes the extra words too
+        // harshly (score ~39), but this is unambiguously a brand conflict.
+        // Boost any company whose normalized name starts with the normalized brand to 75.
+        const nb = normalizeBrandName(brandName);
+        const nc = normalizeBrandName(name);
+        if (nb.length >= 4 && nc.startsWith(nb) && score < 75) score = 75;
+
         return {
           source:          "gleif",
           name,
-          similarity_score: similarityScore(brandName, name),
+          similarity_score: score,
           jurisdiction:    parseJurisdiction(entity),
-          company_number:  record.id,   // LEI code — globally unique
+          company_number:  record.id,
           status:          parseStatus(entity, reg),
           incorporated_on: reg.initialRegistrationDate ?? null,
           company_type:    parseCompanyType(entity),

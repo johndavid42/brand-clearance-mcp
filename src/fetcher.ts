@@ -1,35 +1,58 @@
 import type { BrandClearanceReport, TrademarkHit } from "./types.js";
 import { Cache } from "./cache.js";
-import { normalizeBrandName, computeOverallRisk } from "./similarity.js";
+import { normalizeBrandName, computeOverallRisk, applyNiceClassFilter } from "./similarity.js";
 import { searchUsptoTrademarks } from "./uspto.js";
 import { searchEuipoTrademarks } from "./euipo.js";
 import { checkDomainAvailability, checkTyposquats } from "./domains.js";
 import { searchCompanyRegistrations } from "./companies.js";
 import { fetchBrandWebMetadata } from "./webcheck.js";
 
-const TTL_MS = 24 * 60 * 60 * 1000; // 24h — trademark data stable intraday
+const TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
 const cache = new Cache<BrandClearanceReport>();
 
 // ── Name normalization ────────────────────────────────────────────────────
 
 export function sanitizeBrandName(raw: string): string {
-  return raw.trim().slice(0, 100); // cap length, preserve original case for display
+  return raw.trim().slice(0, 100);
+}
+
+// ── nice_class post-processing ────────────────────────────────────────────
+// nice_class re-weighting is pure post-processing — it never triggers a new
+// fetch. We always cache the raw (unweighted) report and apply the class
+// filter at query time. This prevents one unique class value per call from
+// exhausting USPTO rate limits with duplicate fetches.
+
+function applyNiceClass(report: BrandClearanceReport, niceClass: number): BrandClearanceReport {
+  const effectiveHits = applyNiceClassFilter(report.trademark_hits, niceClass);
+  const { score, factors, summary } = computeOverallRisk(
+    effectiveHits,
+    report.domain_status.checked_domains,
+    report.typosquat_domains,
+    report.company_registrations,
+  );
+  return {
+    ...report,
+    trademark_hits:      effectiveHits,
+    conflict_risk_score: score,
+    conflict_summary:    summary,
+    risk_factors:        factors,
+  };
 }
 
 // ── Main clearance fetch ──────────────────────────────────────────────────
 
 export async function runBrandClearance(rawName: string, niceClass?: number): Promise<BrandClearanceReport> {
-  const brand    = sanitizeBrandName(rawName);
-  const baseKey  = normalizeBrandName(brand);
+  const brand   = sanitizeBrandName(rawName);
+  const baseKey = normalizeBrandName(brand);
 
   if (!baseKey || baseKey.length < 2) throw new Error(`Brand name too short or invalid: "${rawName}"`);
 
-  // Include nice_class in cache key so different class queries don't share cached results
-  const cacheKey = niceClass !== undefined ? `${baseKey}:nc${niceClass}` : baseKey;
-
-  const cached = cache.get(cacheKey);
-  if (cached) return cached;
+  // Always cache by brand name only — nice_class is applied on the way out
+  const cached = cache.get(baseKey);
+  if (cached) {
+    return niceClass !== undefined ? applyNiceClass(cached, niceClass) : cached;
+  }
 
   const t0 = Date.now();
 
@@ -44,17 +67,17 @@ export async function runBrandClearance(rawName: string, niceClass?: number): Pr
       fetchBrandWebMetadata(brand),
     ]);
 
-  const allTrademarkHits: TrademarkHit[] = [
+  const rawTrademarkHits: TrademarkHit[] = [
     ...usptoResult.hits,
     ...euipoResult.hits,
   ].sort((a, b) => b.similarity_score - a.similarity_score);
 
+  // Compute risk on raw hits for storage
   const { score, factors, summary } = computeOverallRisk(
-    allTrademarkHits,
+    rawTrademarkHits,
     domainResult.checked_domains,
     typosquatResult,
     companyResult.registrations,
-    niceClass,
   );
 
   const report: BrandClearanceReport = {
@@ -62,7 +85,7 @@ export async function runBrandClearance(rawName: string, niceClass?: number): Pr
     normalized_name:        baseKey,
     conflict_risk_score:    score,
     conflict_summary:       summary,
-    trademark_hits:         allTrademarkHits,
+    trademark_hits:         rawTrademarkHits,  // always store raw, unweighted
     domain_status:          domainResult,
     brand_web_metadata:     webMetadata,
     typosquat_domains:      typosquatResult,
@@ -72,14 +95,16 @@ export async function runBrandClearance(rawName: string, niceClass?: number): Pr
     latency_ms:             Date.now() - t0,
   };
 
-  cache.set(cacheKey, report, TTL_MS);
-  return report;
+  cache.set(baseKey, report, TTL_MS);
+
+  // Apply nice_class on the way out without mutating the cached version
+  return niceClass !== undefined ? applyNiceClass(report, niceClass) : report;
 }
 
 // ── Sub-fetchers (share cache, focused output) ────────────────────────────
 
-export async function getTrademarkHits(rawName: string) {
-  const report = await runBrandClearance(rawName);
+export async function getTrademarkHits(rawName: string, niceClass?: number) {
+  const report = await runBrandClearance(rawName, niceClass);
   return {
     brand_name:      report.brand_name,
     trademark_hits:  report.trademark_hits,
@@ -90,10 +115,10 @@ export async function getTrademarkHits(rawName: string) {
 export async function getDomainConflicts(rawName: string) {
   const report = await runBrandClearance(rawName);
   return {
-    brand_name:       report.brand_name,
-    domain_status:    report.domain_status,
-    typosquat_domains:report.typosquat_domains,
-    data_freshness:   report.data_freshness,
+    brand_name:        report.brand_name,
+    domain_status:     report.domain_status,
+    typosquat_domains: report.typosquat_domains,
+    data_freshness:    report.data_freshness,
   };
 }
 

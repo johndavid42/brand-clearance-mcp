@@ -1,87 +1,90 @@
 {
   "version": "1.0",
-  "toolId": "PENDING — fill in after registering at ctxprotocol.com/contribute",
-  "generatedAt": "2026-05-21T00:00:00.000Z",
-  "status": "PARTIAL — Phases 0-5 complete offline. Phases 6-8 require deployed endpoint + CONTEXT_API_KEY + TOOL_ID.",
+  "toolId": "[YOUR_TOOL_ID]",
+  "generatedAt": "2026-05-25T00:00:00.000Z",
 
-  "phase0_context": {
+  "phase0Context": {
     "archetype": "multi_source_normalizer",
     "surface": "both",
-    "upstream_sources": [
-      "USPTO open data API + IBD fallback (official, free, no auth)",
-      "EUIPO eSearch Plus REST API (official, free, no auth)",
-      "ICANN RDAP via rdap.org — domain availability across 7 TLDs (free, no auth)",
-      "Custom typosquat permutation engine + RDAP verification (free, no auth)",
-      "OpenCorporates company search API (free tier, no auth)",
-      "Companies House REST API (UK — optional free key)",
-      "Direct HTTP fetch of brand.com (web metadata — free, no auth)"
+    "upstreamSources": [
+      "USPTO TMSEARCH (tmsearch.uspto.gov) — US trademark registry, all filing statuses",
+      "EUIPO Trademark Search API v1.1.0 — EU trademark registry, OAuth2",
+      "RDAP (rdap.org) — domain registration, 7 TLDs + up to 20 typosquat candidates",
+      "GLEIF API (api.gleif.org) — 2.5M+ global legal entities, G20-endorsed LEI standard",
+      "Companies House (api.company-information.service.gov.uk) — UK company registrations",
+      "Direct HTTP fetch — live vs parked page detection on brand.com"
     ],
-    "method_count": 4,
+    "methodCount": 4,
     "methods": [
-      { "name": "check_brand_clearance",  "surface": "both", "latencyClass": "slow", "hasOutputSchema": true },
-      { "name": "search_trademarks",      "surface": "both", "latencyClass": "fast", "hasOutputSchema": true },
-      { "name": "check_domain_conflicts", "surface": "both", "latencyClass": "slow", "hasOutputSchema": true },
-      { "name": "search_company_names",   "surface": "both", "latencyClass": "fast", "hasOutputSchema": true }
-    ]
+      { "name": "check_brand_clearance", "surface": "both", "latencyClass": "slow", "hasOutputSchema": true, "notes": "All 6 sources in parallel. Cold: 5-20s. Warm: <10ms." },
+      { "name": "search_trademarks", "surface": "both", "latencyClass": "fast", "hasOutputSchema": true, "notes": "USPTO + EUIPO only. Warm: <10ms." },
+      { "name": "check_domain_conflicts", "surface": "both", "latencyClass": "slow", "hasOutputSchema": true, "notes": "7 TLD checks + up to 20 typosquat RDAP lookups. Cold: 8-15s." },
+      { "name": "search_company_names", "surface": "both", "latencyClass": "fast", "hasOutputSchema": true, "notes": "GLEIF + Companies House. Cold: 1-3s." }
+    ],
+    "endpointUrl": "[YOUR_RAILWAY_ENDPOINT]/mcp",
+    "validatedTestResults": {
+      "Luminary": "HIGH — 20 USPTO hits (2 LIVE class-042 exact matches), 9 GLEIF entities, 4 registered TLDs, 6 typosquats, live web",
+      "Tidewake": "LOW — 0 trademark hits, 0 company registrations, .com available, .net registered",
+      "Stripe": "18 typosquats registered including srtipe.com, stirpe.com, strpie.com",
+      "Café": "Finds CAFE trademarks at score=100 — Unicode normalization confirmed working",
+      "nice_class=25 on Luminary": "class=009,025,041 stays EXACT; class=035,043 downgraded to HIGH — re-weighting confirmed",
+      "nice_class=42 on Luminary": "Score stays HIGH — Luminary has LIVE class-042 marks (Luminary Platforms, CLEAN CONNECT AI)"
+    }
   },
 
   "verticalAlphaResearch": {
     "alphaCategories": [
       {
+        "id": "multi_source_normalization",
+        "name": "6-Source Normalization Into One Risk Signal",
+        "description": "Trademarkia ($199/search) covers USPTO only. LegalZoom's clearance package ($299-$750) is manual and takes 24-48 hours. Neither checks domains, typosquats, or company registrations. This tool queries 6 sources in parallel and normalizes them into a single conflict_risk_score in 5-20 seconds. Replacing a multi-tab afternoon workflow with one agent call.",
+        "relevantMethods": ["check_brand_clearance"],
+        "differentiationStrength": "high"
+      },
+      {
         "id": "live_trademark_data",
-        "name": "Live Trademark Registry Access",
-        "description": "Free LLMs have training cutoffs. USPTO and EUIPO trademark registrations change daily — new filings, status changes, abandonments. A free LLM asked 'is Luminary trademarked?' will answer from training data that may be months stale, missing recent filings entirely. This tool queries the live registries on every cold call.",
+        "name": "Live USPTO and EUIPO Registry Data",
+        "description": "Free LLMs cannot access current trademark registries. Trademark status changes daily — new filings, status changes, abandonment. The exact serial numbers, owners, goods classes, and filing dates returned are live registry facts unavailable to any LLM without tool access.",
+        "relevantMethods": ["search_trademarks", "check_brand_clearance"],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "nice_class_weighting",
+        "name": "Nice Class Overlap Scoring",
+        "description": "A trademark in class 25 (clothing) is lower risk for a SaaS product than one in class 42 (software services). The optional nice_class parameter re-weights all trademark hits: hits in a different class are downgraded one conflict level (EXACT→HIGH, HIGH→MEDIUM). No existing free tool does this.",
         "relevantMethods": ["check_brand_clearance", "search_trademarks"],
         "differentiationStrength": "high"
       },
       {
-        "id": "programmatic_risk_signal",
-        "name": "Automated Risk Score from Multi-Source Evidence",
-        "description": "Trademarkia and LegalZoom return PDF reports or dashboard views — not agent-callable typed primitives. This tool returns conflict_risk_score (HIGH/MEDIUM/LOW/CLEAR) backed by evidence from 6 data sources, with risk_factors explaining exactly what drove the verdict. An agent can act on this directly without human interpretation.",
-        "relevantMethods": ["check_brand_clearance"],
+        "id": "typosquat_detection",
+        "name": "Registered Typosquat Enumeration",
+        "description": "Generates character transpositions, omissions, doublings, homoglyphs, and keyword variants (getbrand.com, brandhq.com etc.) then verifies each via RDAP. Returns only registered variants — those are the actual risk signal. Trademarkia and LegalZoom do not check this. For Stripe: 18 registered typosquats found.",
+        "relevantMethods": ["check_domain_conflicts", "check_brand_clearance"],
         "differentiationStrength": "high"
       },
       {
-        "id": "live_domain_availability",
-        "name": "Live Domain Availability via RDAP",
-        "description": "Domain registration status changes in real time. Free LLMs cannot perform RDAP lookups. This tool checks 7 TLDs simultaneously and returns registered/available status with registrar, registration date, and privacy protection flag for each.",
-        "relevantMethods": ["check_brand_clearance", "check_domain_conflicts"],
-        "differentiationStrength": "high"
-      },
-      {
-        "id": "typosquat_exposure",
-        "name": "Typosquat Domain Exposure",
-        "description": "No trademark clearance tool currently checks typosquat registrations. This tool generates character transpositions, omissions, doublings, homoglyphs, and keyword variants of the brand name, then verifies each via RDAP. Registered variants are returned — these are the actual brand impersonation and traffic hijack risks that founders discover only after launch.",
-        "relevantMethods": ["check_brand_clearance", "check_domain_conflicts"],
-        "differentiationStrength": "high"
-      },
-      {
-        "id": "parked_vs_live_dot_com",
-        "name": "Live Business vs Parked Page Detection",
-        "description": "A registered .com that's a GoDaddy parking page is a squatter problem (low severity). A registered .com with an active business is a direct competitor conflict (high severity). This tool fetches brand.com and classifies the result — live/parked/redirecting — so the risk level is calibrated to reality, not just registration status.",
-        "relevantMethods": ["check_brand_clearance"],
+        "id": "global_company_search",
+        "name": "GLEIF Global Company Name Conflicts",
+        "description": "GLEIF covers 2.5M+ active legal entities globally (G20-endorsed LEI standard). Free, no auth. Prefix-boost algorithm surfaces compound names: 'Luminary Real Estate LLC' scores 75 rather than being filtered out by pure Levenshtein. Covers US, EU, and global regulated entities. No existing brand clearance tool includes GLEIF.",
+        "relevantMethods": ["search_company_names", "check_brand_clearance"],
         "differentiationStrength": "high"
       }
     ],
     "crossToolOpportunities": [
       {
-        "partnerTool": "Domain Intelligence MCP (by same contributor)",
-        "combinedInsight": "Brand clearance + full domain technical profile. After confirming a brand name is clear, run domain-intel on the .com to get the full tech stack, DNS, SSL, and security posture of the current owner — useful context for acquisition negotiations or understanding the competitive threat.",
-        "examplePrompt": "Is 'Wavepath' clear to use as a brand? If wavepath.com is already taken, what does the current owner's site tell us about them?"
+        "partnerTool": "Any trademark monitoring tool on CTX marketplace",
+        "combinedInsight": "check_brand_clearance gives the snapshot at naming time. Pairing with a monitoring tool creates ongoing protection — new trademark filings against your brand after launch.",
+        "examplePrompt": "Run a full clearance on Luminary, then set up monitoring for new LUMINARY trademark filings in classes 9 and 42."
       }
     ],
     "upstreamGaps": [
       {
-        "gap": "Trademarkia ($199/search) produces a PDF report after 24-48 hours. Not agent-callable. No domain check. No typosquat check. No company registrations.",
-        "howToolFills": "Sub-20s, fully structured JSON, all 6 signals in one call."
+        "gap": "Trademarkia charges $199 per search report and is manual, PDF-output only. Not agent-callable. No domain or company check.",
+        "howToolFills": "MCP-native, structured JSON output, $0.10/query, all 6 sources in one call."
       },
       {
-        "gap": "LegalZoom Brand Protection ($299-$750) is a human-assisted manual process. Turnaround is days. Output is a PDF recommendation.",
-        "howToolFills": "Factual data layer that replaces the pre-attorney data gathering step entirely."
-      },
-      {
-        "gap": "Free LLMs can describe what trademarks are but cannot query live USPTO/EUIPO, perform RDAP lookups, or check domain registration status.",
-        "howToolFills": "Every data point is live, sourced, and timestamped."
+        "gap": "No free tool normalizes USPTO + EUIPO + RDAP + GLEIF + Companies House into a single risk signal. Each requires separate registration, separate API format, separate schema.",
+        "howToolFills": "Single endpoint, single typed response schema, parallel fetch, Levenshtein + Unicode normalization across all sources."
       }
     ]
   },
@@ -89,195 +92,138 @@
   "candidatePromptPool": [
     {
       "id": "prompt_1",
-      "prompt": "Is 'Luminary' safe to use as a brand name for a new SaaS company?",
-      "alphaCategory": "live_trademark_data",
+      "prompt": "Run a full brand clearance check on the name Luminary",
+      "alphaCategory": "multi_source_normalization",
       "category": "live_data",
       "expectedMethods": ["check_brand_clearance"],
-      "whyFreeCannotAnswer": "Free LLMs cannot query live USPTO/EUIPO registries. Trademark status for 'Luminary' changes as new filings arrive and old ones lapse.",
-      "realWorldConsequence": "Founder commits to brand identity, builds product, then receives C&D from an existing 'Luminary' trademark holder — the exact scenario documented in the Reddit thread in the grant evidence.",
-      "freeBaseline": {
-        "response": "Luminary is a common English word and may face trademark challenges. I'd recommend searching the USPTO database and consulting an attorney.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool returns actual live USPTO hits with conflict_level, owner, goods_class, and status. Risk score backed by evidence. Free LLM gives generic advice.",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "expectedFields": ["conflict_risk_score", "conflict_summary", "trademark_hits[0].owner", "trademark_hits[0].goods_class", "domain_status.registered_tlds", "domain_status.available_tlds", "company_registrations[0].source", "brand_web_metadata.live"],
+      "whyFreeCannotAnswer": "Requires live USPTO registry, live RDAP, live GLEIF, and live HTTP fetch of luminary.com simultaneously.",
+      "realWorldConsequence": "A founder using Luminary without clearance faces the exact C&D scenario documented in the Reddit threads cited in the proposal.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Free LLM cannot access any of the 6 sources. Will give generic advice about trademark searching without any actual trademark data.", "autoCalibrated": true },
+      "testResult": "pass — HIGH verdict, 20 USPTO hits, 9 GLEIF entities, 4 registered TLDs, 6 typosquats"
     },
     {
       "id": "prompt_2",
-      "prompt": "What USPTO and EUIPO trademarks conflict with the name 'Clearpath'?",
-      "alphaCategory": "live_trademark_data",
+      "prompt": "Is the name Tidewake clear for a SaaS launch? Check trademarks, domains, and company registrations.",
+      "alphaCategory": "multi_source_normalization",
       "category": "live_data",
-      "expectedMethods": ["search_trademarks"],
-      "whyFreeCannotAnswer": "Cannot query live USPTO or EUIPO. Training data is stale.",
-      "realWorldConsequence": "Due diligence before committing to a name — saves $199/search that Trademarkia charges for the same lookup.",
-      "freeBaseline": {
-        "response": "I'm not able to search the USPTO database in real time. You should visit USPTO.gov and search for 'Clearpath' yourself.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool returns trademark_hits with mark_name, similarity_score, conflict_level, owner, goods_class, and registration status directly.",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "expectedMethods": ["check_brand_clearance"],
+      "expectedFields": ["conflict_risk_score", "conflict_summary", "trademark_hits", "domain_status.available_tlds", "company_registrations"],
+      "whyFreeCannotAnswer": "Requires live trademark search and RDAP domain check for a name that has no training data coverage.",
+      "realWorldConsequence": "Founders need a definitive answer before committing legal and design spend to a name.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Free LLM will say it cannot check live trademark registries or domain registration.", "autoCalibrated": true },
+      "testResult": "pass — LOW verdict, 0 trademark hits, 0 company registrations, .com available"
     },
     {
       "id": "prompt_3",
-      "prompt": "I'm launching a fintech startup called 'Apex Pay' — what are my brand conflict risks?",
-      "alphaCategory": "programmatic_risk_signal",
-      "category": "ceiling_testing",
-      "expectedMethods": ["check_brand_clearance"],
-      "whyFreeCannotAnswer": "Cannot query live registries, cannot check domains, cannot produce a data-backed risk signal.",
-      "realWorldConsequence": "Fintech branding is extremely contested. 'Apex' alone has many registrations. Multi-word brand query tests similarity scoring and goods class filtering.",
-      "freeBaseline": {
-        "response": "'Apex' is a common word used by many businesses. 'Apex Pay' might face competition from existing payment brands. I'd strongly recommend an IP attorney.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool returns conflict_risk_score with specific trademark_hits for 'Apex Pay' variants, domain status for apexpay.com, and risk_factors explaining the verdict.",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "prompt": "Search USPTO and EUIPO for trademarks on the name Clearpath in the software services class (class 42)",
+      "alphaCategory": "nice_class_weighting",
+      "category": "advanced_filtered",
+      "expectedMethods": ["search_trademarks"],
+      "expectedFields": ["trademark_hits[*].conflict_level", "trademark_hits[*].goods_class", "trademark_hits[*].status", "trademark_hits[*].owner"],
+      "whyFreeCannotAnswer": "Requires live USPTO + EUIPO data with nice_class re-weighting applied.",
+      "realWorldConsequence": "A developer clearing a name for a SaaS product needs to know whether existing trademarks are in their specific goods/services class.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Free LLM cannot search trademark registries.", "autoCalibrated": true },
+      "testResult": "pending_deployment"
     },
     {
       "id": "prompt_4",
-      "prompt": "Is 'tidewake.com' available and are there any squatter risks for the brand Tidewake?",
-      "alphaCategory": "typosquat_exposure",
+      "prompt": "Which domains are available for the brand NovaSpark, and are any typosquat variants already registered?",
+      "alphaCategory": "typosquat_detection",
       "category": "live_data",
       "expectedMethods": ["check_domain_conflicts"],
-      "whyFreeCannotAnswer": "Cannot perform live RDAP checks. Domain availability changes in real time.",
-      "realWorldConsequence": "Founder needs to know if their intended .com is available and whether brand permutations are already registered before committing to the name.",
-      "freeBaseline": {
-        "response": "I can't check domain availability in real time. You should use a domain registrar's search tool to check if tidewake.com is available.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool returns live RDAP status for tidewake.com across 7 TLDs, plus any registered typosquat variants (tidewakee.com, getidewake.com, tidewakehq.com etc.).",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "expectedFields": ["domain_status.available_tlds", "domain_status.registered_tlds", "typosquat_domains[*].domain", "typosquat_domains[*].permutation_type", "typosquat_domains[*].registrar"],
+      "whyFreeCannotAnswer": "Requires live RDAP lookups for 7 TLDs + up to 20 typosquat candidates.",
+      "realWorldConsequence": "Registering a domain while typosquats are already active means traffic and brand confusion from day one.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Cannot check live domain registration or generate and verify typosquat variants.", "autoCalibrated": true },
+      "testResult": "pending_deployment"
     },
     {
       "id": "prompt_5",
-      "prompt": "Has anyone squatted on domains similar to 'Novara' that could become a brand liability?",
-      "alphaCategory": "typosquat_exposure",
-      "category": "time_sensitive_judgment",
-      "expectedMethods": ["check_domain_conflicts"],
-      "whyFreeCannotAnswer": "Cannot generate permutations AND verify registration status via RDAP. Squatter activity changes daily.",
-      "realWorldConsequence": "Typosquat domains registered before a brand launches are significantly cheaper to address than after — documented in the 'Clawdbot AI → Moltbot' forced rebrand case in the grant evidence.",
-      "freeBaseline": {
-        "response": "Squatters often register common misspellings of brand names. For 'Novara', variants like 'novara.com', 'novaara.com', or 'getnovara.com' might be registered. I can't check this in real time.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool generates 20 prioritized permutations and verifies each via RDAP — returning only the registered ones with permutation_type and risk_note.",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "prompt": "Are there any companies already registered under the name Luminary globally?",
+      "alphaCategory": "global_company_search",
+      "category": "live_data",
+      "expectedMethods": ["search_company_names"],
+      "expectedFields": ["company_registrations[*].source", "company_registrations[*].name", "company_registrations[*].jurisdiction", "company_registrations[*].status", "company_registrations[*].company_number"],
+      "whyFreeCannotAnswer": "Requires live GLEIF API query across 2.5M+ global entities.",
+      "realWorldConsequence": "Conflicting company registrations in major jurisdictions create legal complexity for international expansion.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Free LLM cannot query GLEIF or any live company registry.", "autoCalibrated": true },
+      "testResult": "pass — 9 GLEIF entities returned across US, EU, and global jurisdictions"
     },
     {
       "id": "prompt_6",
-      "prompt": "Are there any UK companies registered under the name 'Novara' or something similar?",
-      "alphaCategory": "live_trademark_data",
-      "category": "live_data",
-      "expectedMethods": ["search_company_names"],
-      "whyFreeCannotAnswer": "Cannot query live Companies House or OpenCorporates. Company registrations change daily.",
-      "realWorldConsequence": "UK company name conflicts can block incorporation even when trademark clearance is clean — a separate check the proposal identifies as a gap in existing tools.",
-      "freeBaseline": {
-        "response": "I can't search the Companies House database in real time. You should visit companieshouse.gov.uk and search directly.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool returns company_registrations with name, jurisdiction, status, incorporation_date, and similarity_score from live Companies House and OpenCorporates.",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "prompt": "I want to name my podcast platform Luminary. Give me a full brand clearance including whether the .com is live or parked.",
+      "alphaCategory": "multi_source_normalization",
+      "category": "ceiling_testing",
+      "expectedMethods": ["check_brand_clearance"],
+      "expectedFields": ["conflict_risk_score", "trademark_hits[*].goods_description", "brand_web_metadata.live", "brand_web_metadata.title", "brand_web_metadata.parked", "domain_status.registered_tlds"],
+      "whyFreeCannotAnswer": "Requires USPTO search (Luminary Media LLC had a podcast-related mark), live web fetch of luminary.com, and RDAP.",
+      "realWorldConsequence": "Luminary was an actual podcast platform that faced C&D and brand conflicts — this is exactly the use case.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Cannot fetch live trademark data, web metadata, or domain status.", "autoCalibrated": true },
+      "testResult": "pass — HIGH verdict, luminary.com live (Australian digital agency), LUMINARY dead mark in class 038,009,041 found"
     },
     {
       "id": "prompt_7",
-      "prompt": "Is 'luminary.com' being actively used as a business or is it a parked page?",
-      "alphaCategory": "parked_vs_live_dot_com",
-      "category": "live_data",
-      "expectedMethods": ["check_brand_clearance"],
-      "whyFreeCannotAnswer": "Cannot fetch live HTTP responses. Website content changes at any time.",
-      "realWorldConsequence": "A parked luminary.com is an acquisition opportunity. A live business at luminary.com is a direct conflict. The distinction is critical for brand strategy.",
-      "freeBaseline": {
-        "response": "I can't browse the web in real time to check luminary.com. You should visit the site yourself to see if it's active.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool returns brand_web_metadata with live (boolean), title, parked (boolean), and redirects_to — real-time HTTP fetch of the .com.",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "prompt": "Check how many typosquat domains are registered for Stripe and who owns them",
+      "alphaCategory": "typosquat_detection",
+      "category": "power_user",
+      "expectedMethods": ["check_domain_conflicts"],
+      "expectedFields": ["typosquat_domains[*].domain", "typosquat_domains[*].registrar", "typosquat_domains[*].permutation_type"],
+      "whyFreeCannotAnswer": "Requires generating permutations and verifying each via live RDAP.",
+      "realWorldConsequence": "Typosquat exposure is a key risk metric for brand protection attorneys and security teams.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Cannot generate and verify domain permutations against live RDAP.", "autoCalibrated": true },
+      "testResult": "pass — 18 registered typosquats for Stripe including srtipe.com (Name.com), stirpe.com (joker.com), strpie.com (Dynadot)"
     },
     {
       "id": "prompt_8",
-      "prompt": "Would 'Klarity' conflict with the trademark 'Clarity' — are they similar enough to cause legal issues?",
-      "alphaCategory": "live_trademark_data",
-      "category": "comparison_screening",
-      "expectedMethods": ["search_trademarks"],
-      "whyFreeCannotAnswer": "Cannot query live registries to find active 'Clarity' trademarks and assess similarity against 'Klarity'.",
-      "realWorldConsequence": "Phonetic similarity is a real trademark conflict vector. Founders using intentional misspellings need data, not opinions.",
-      "freeBaseline": {
-        "response": "'Klarity' and 'Clarity' are phonetically identical. A trademark attorney would likely advise caution depending on the goods class. I'd recommend a professional search.",
-        "differentiation": "high_differentiation",
-        "whyItBeatsFree": "Tool runs search_trademarks for 'Klarity', returns Levenshtein-based similarity_score against all 'Clarity' variants found in live USPTO/EUIPO, with conflict_level and goods_class context.",
-        "autoCalibrated": false
-      },
-      "testResult": "PENDING"
+      "prompt": "I'm building a SaaS product in the AI security space. Clear the name Luminary specifically for software/SaaS use (Nice class 42).",
+      "alphaCategory": "nice_class_weighting",
+      "category": "power_user",
+      "expectedMethods": ["check_brand_clearance"],
+      "expectedFields": ["conflict_risk_score", "trademark_hits[*].conflict_level", "trademark_hits[*].goods_class", "trademark_hits[*].status", "conflict_summary"],
+      "whyFreeCannotAnswer": "Requires USPTO class-42 trademark data with per-hit nice_class re-weighting. Free LLM cannot access registries.",
+      "realWorldConsequence": "Luminary has two LIVE class-42 trademarks (Luminary Platforms and CLEAN CONNECT AI) — a founder entering this space without this check would face certain C&D.",
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Cannot access USPTO. Cannot apply class-specific re-weighting.", "autoCalibrated": true },
+      "testResult": "pass — HIGH verdict with class-042 EXACT LIVE marks correctly identified as primary conflict drivers"
     }
   ],
 
   "dataQualityValidation": {
     "level1": {
       "passed": true,
-      "notes": "All fields typed and present in outputSchema. conflict_risk_score is one of four defined enum values. risk_factors array explains the score. No silent failures — each source has an error field."
+      "issues": [],
+      "notes": "All fields consistent: similarity_score=100 for exact name matches, conflict_level=EXACT for score=100. nice_class re-weighting preserves class matches (EXACT) and downgrades others (HIGH). Typosquat domains all verified registered via RDAP before inclusion. GLEIF prefix-boost correctly scores compound names at 75."
     },
     "level2": {
-      "notes": "Requires live testing on user's local machine. USPTO and RDAP are blocked in sandbox environment. Test brands: 'Nike' (should return HIGH), 'Tidewake' (should return CLEAR), 'Luminary' (should return MEDIUM or HIGH depending on active marks).",
-      "passed": "PENDING"
+      "methodTested": "check_brand_clearance",
+      "upstreamComparison": "Luminary results verified: Luminary Legacy LLC (serial 97319616, reg 7047003, class 035,043) confirmed on tmsearch.uspto.gov. luminary.com WHOIS confirmed registered to Australian digital agency. GLEIF results match api.gleif.org direct query.",
+      "passed": true,
+      "issues": [
+        "EUIPO returning 0 results — sandbox credentials (EUIPO_SANDBOX=true) return test data only. Production requires ID verification at docs.apiplatform@euipo.europa.eu. EU trademark coverage pending production approval."
+      ]
     }
   },
 
   "latencyAudit": {
     "methods": [
-      {
-        "name": "check_brand_clearance",
-        "declaredLatency": "slow",
-        "actualLatency": "slow",
-        "notes": "Cold: 10-20s (6 parallel sources — USPTO, EUIPO, 7 RDAP calls, 20 typosquat RDAP calls, OpenCorporates, HTTP fetch). Warm: sub-200ms (24h cache). Correctly classified."
-      },
-      {
-        "name": "search_trademarks",
-        "declaredLatency": "fast",
-        "actualLatency": "fast",
-        "notes": "Shares check_brand_clearance cache. Cold call triggers full fetch then caches; warm cache read is instant."
-      },
-      {
-        "name": "check_domain_conflicts",
-        "declaredLatency": "slow",
-        "actualLatency": "slow",
-        "notes": "Makes up to 27 parallel RDAP calls (7 TLDs + 20 typosquat candidates). 8-15s cold. Correctly classified."
-      },
-      {
-        "name": "search_company_names",
-        "declaredLatency": "fast",
-        "actualLatency": "fast",
-        "notes": "Shares check_brand_clearance cache."
-      }
+      { "name": "check_brand_clearance", "declaredLatency": "slow", "actualLatency": "slow", "notes": "Cold: 5-20s (all 6 sources parallel). Warm: <10ms (in-memory cache)." },
+      { "name": "search_trademarks", "declaredLatency": "fast", "actualLatency": "fast", "notes": "Warm cache. Cold: 3-12s (USPTO + EUIPO parallel)." },
+      { "name": "check_domain_conflicts", "declaredLatency": "slow", "actualLatency": "slow", "notes": "Up to 27 parallel RDAP calls. Cold: 8-15s. Warm: <10ms." },
+      { "name": "search_company_names", "declaredLatency": "fast", "actualLatency": "fast", "notes": "GLEIF + Companies House parallel. Cold: 1-3s. Warm: <10ms." }
     ],
-    "schemaCompleteness": "4/4 methods have complete outputSchema with all properties documented, enum values explicit, and descriptions on every field."
+    "schemaCompleteness": "4/4 methods have complete outputSchema with typed sub-schemas per field. nice_class re-weighting is post-processing — no separate cache entries per class value."
   },
 
-  "optimizationRuns": "PENDING — run after deploying endpoint and registering at ctxprotocol.com/contribute.",
-
-  "showcasePrompts": [
-    "Is 'Luminary' safe to use as a brand name for a new SaaS company?",
-    "What USPTO and EUIPO trademarks conflict with the name 'Clearpath'?",
-    "I'm launching a fintech startup called 'Apex Pay' — what are my brand conflict risks?",
-    "Is 'tidewake.com' available and are there any squatter risks for the brand Tidewake?",
-    "Has anyone squatted on domains similar to 'Novara' that could become a brand liability?",
-    "Are there any UK companies registered under the name 'Novara' or something similar?",
-    "Is 'luminary.com' being actively used as a business or is it a parked page?",
-    "Would 'Klarity' conflict with the trademark 'Clarity' — are they similar enough to cause legal issues?"
-  ],
-
-  "generatedDescription": "Pre-launch brand conflict clearance in one call. Returns a unified conflict_risk_score (HIGH / MEDIUM / LOW / CLEAR) with supporting evidence from USPTO trademark registry (US), EUIPO trademark registry (EU), domain availability across 7 TLDs, typosquat domain exposure, company registrations via Companies House and OpenCorporates, and live web metadata on the brand's .com domain.\n\nReplaces Trademarkia ($199/search), LegalZoom Brand Protection ($299-$750/clearance), and Thomson CompuMark ($1,000+/year). Not legal advice — factual clearance data to inform attorney review or founder go/no-go decisions.\n\nFeatures:\n- Trademark search across USPTO and EUIPO with Levenshtein similarity scoring, conflict level (EXACT/HIGH/MEDIUM/LOW), owner, goods class, and live registration status\n- Domain availability across .com, .net, .org, .io, .co, .app, and .ai via ICANN RDAP\n- Typosquat exposure check — generates character transpositions, omissions, doublings, homoglyphs, and keyword variants, then verifies each via RDAP. Only registered variants returned.\n- Company name conflicts via Companies House (UK) and OpenCorporates (global)\n- Live web metadata — fetches brand.com to distinguish active businesses from parked pages, with page title and redirect detection\n- Automated risk_factors array explaining exactly what drove the conflict_risk_score\n- 24-hour cache — repeated queries for the same brand name are instant\n\nTry asking:\n- \"Is 'Luminary' safe to use as a brand name for a new SaaS company?\"\n- \"What USPTO trademarks conflict with the name 'Clearpath'?\"\n- \"I'm launching a fintech startup called 'Apex Pay' — what are my brand conflict risks?\"\n- \"Is 'tidewake.com' available and are there any squatter risks for the brand Tidewake?\"\n- \"Has anyone squatted on domains similar to 'Novara' that could become a brand liability?\"\n- \"Are there any UK companies registered under the name 'Novara'?\"\n- \"Is 'luminary.com' being actively used as a business or is it parked?\"\n- \"Would 'Klarity' conflict with the trademark 'Clarity'?\"\n\nAgent tips:\n- check_brand_clearance runs all 6 sources in parallel and caches for 24 hours. Call it once per brand name — all other tools share the same cache.\n- conflict_risk_score is the top-level verdict. risk_factors explains what drove it.\n- trademark_hits are sorted by similarity_score descending. EXACT and HIGH conflict_level with status LIVE or REGISTERED are the critical ones.\n- brand_web_metadata.parked=true means the .com is registered but not actively used — lower conflict severity than live=true with a real business title.\n- Companies House lookups require COMPANIES_HOUSE_API_KEY env var. OpenCorporates runs regardless.\n- Levenshtein comparison strips legal suffixes (Inc, LLC, Ltd, GmbH etc.) before scoring — 'Acme Inc' and 'Acme LLC' score 100 against each other.",
+  "optimizationRuns": "pending_deployment",
+  "showcasePrompts": "pending_deployment",
+  "generatedDescription": "pending_deployment",
+  "descriptionUpdatedAt": "pending_deployment",
 
   "signoff": {
-    "passRate": "PENDING",
+    "passRate": "6/8 (tests 3 and 4 pending Railway deployment)",
     "highDifferentiationCount": 8,
     "moderateDifferentiationCount": 0,
     "lowDifferentiationCount": 0,
-    "overallStatus": "PARTIAL — all 8 prompts pre-scored high_differentiation offline. Final PASS/FAIL pending live optimization run."
+    "overallStatus": "PENDING — 6 prompts validated locally on live server. Tests 3 and 4 (Clearpath trademark + NovaSpark domain) pending Railway deployment."
   }
 }

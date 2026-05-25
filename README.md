@@ -1,134 +1,150 @@
-# Brand Clearance Intelligence MCP
+# brand-clearance-mcp
 
-**Pre-launch brand conflict clearance in one call.** USPTO + EUIPO trademark registries, domain availability across 7 TLDs, typosquat exposure, company registrations, and live web metadata — normalized into a single risk signal.
+Pre-launch brand conflict clearance via MCP. One call returns a unified risk verdict across USPTO (US) and EUIPO (EU) trademark registries, domain availability across 7 TLDs, typosquat exposure, and global company name conflicts via GLEIF — normalized into a single typed report with a conflict_risk_score of HIGH / MEDIUM / LOW / CLEAR.
 
-Listed on the [Context marketplace](https://ctxprotocol.com).
+Replaces Trademarkia ($199/search) and LegalZoom Brand Protection ($299–$750/clearance package) with a programmatic, agent-callable API at $0.10/query.
 
-## What it replaces
+## Data Sources
 
-| Tool | Cost | What it provided |
+| Source | Coverage | Auth |
 |---|---|---|
-| Trademarkia | $199/search report | USPTO/EUIPO trademark lookup |
-| LegalZoom Brand Protection | $299–$750/clearance | Manual clearance package |
-| Thomson CompuMark / Clarifip | $1,000+/year | IP attorney conflict analysis |
+| USPTO TMSEARCH | US trademark registry — all live, dead, and pending marks | None (browser-style headers required) |
+| EUIPO Trademark Search API v1.1.0 | EU trademark registry — registered and filed marks | OAuth2 client_credentials (free registration at dev.euipo.europa.eu) |
+| RDAP (rdap.org) | Domain registration — 7 TLDs: .com .net .org .io .co .app .ai | None |
+| RDAP typosquat check | Transpositions, omissions, doublings, homoglyphs, keyword variants (.com only) | None |
+| GLEIF API | Global legal entity registry — 2.5M+ active entities, G20-endorsed LEI standard | None |
+| Companies House | UK company registrations | Free key: developer.company-information.service.gov.uk |
+| Direct HTTP fetch | Live vs parked page detection on brand.com | None |
 
-This MCP returns the factual clearance data that attorneys and founders currently assemble manually across 4–5 separate tools, in one programmatic call, in under 20 seconds.
+## MCP Tools
 
-## Data sources
+### `check_brand_clearance`
+Full pre-launch clearance report in one call. All 6 sources fire in parallel.
 
-| Signal | Source | Auth |
-|---|---|---|
-| US trademarks | USPTO open data API + IBD fallback | None |
-| EU trademarks | EUIPO Trademark Search API v1.1.0 (dev.euipo.europa.eu) | OAuth2 client_credentials — free registration, production requires ID docs |
-| Domain availability | ICANN RDAP (7 TLDs) | None |
-| Typosquat exposure | Custom permutation engine + RDAP | None |
-| Company registrations | OpenCorporates (global) | None |
-| Company registrations (UK) | Companies House REST API | Optional free key |
-| Web metadata | Direct HTTP fetch of brand.com | None |
-
-**Zero paid APIs. All sources are official, free, and publicly documented.**
-
-## Tools
-
-| Tool | Description | Latency |
-|---|---|---|
-| `check_brand_clearance` | Full report: trademarks, domains, typosquats, companies, risk score | sub-200ms cached / 10–20s cold |
-| `search_trademarks` | USPTO + EUIPO trademark hits only, filterable by jurisdiction | sub-200ms (shares cache) |
-| `check_domain_conflicts` | Domain availability (7 TLDs) + registered typosquat variants | sub-200ms (shares cache) |
-| `search_company_names` | Companies House (UK) + OpenCorporates company name conflicts | sub-200ms (shares cache) |
-
-All 4 tools share a 24h in-memory domain cache. First call for a brand pays the cold penalty; all subsequent calls are instant.
-
-## Risk scoring
-
-The `conflict_risk_score` field returns one of four verdicts:
-
-| Score | Meaning | Recommendation |
-|---|---|---|
-| `HIGH` | Active trademark conflict or .com owned by a live business | Do not proceed without legal clearance |
-| `MEDIUM` | Similar marks, .com taken, or company name conflict | Attorney review recommended |
-| `LOW` | Minor concerns — inactive marks, parked domains | Monitor before launch |
-| `CLEAR` | No conflicts found | Standard post-launch monitoring |
-
-The `risk_factors` array explains exactly what drove the score.
-
-## Run locally
-
-```bash
-npm install
-npm run dev
+**Input:**
+```json
+{ "brand_name": "Luminary", "nice_class": 42 }
 ```
 
-Test with a brand known to have conflicts:
+`nice_class` (optional, 1–45): If your product falls in a specific Nice classification (e.g. 9 = software downloads, 35 = business services, 42 = SaaS), trademark hits in different classes are downgraded one conflict level. Hits in the same class stay at their original level.
 
-```bash
-curl -s -X POST http://localhost:3000/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"check_brand_clearance","arguments":{"brand_name":"Apex"}}}' \
-  | jq '{score: .result.structuredContent.conflict_risk_score, summary: .result.structuredContent.conflict_summary}'
+**Output:**
+```json
+{
+  "conflict_risk_score": "HIGH",
+  "conflict_summary": "HIGH CONFLICT RISK — Active USPTO trademark 'LUMINARY' (LIVE) is an exact match — owner: Luminary Legacy LLC. Do not proceed without legal clearance.",
+  "trademark_hits": [
+    {
+      "source": "USPTO",
+      "mark_name": "LUMINARY",
+      "similarity_score": 100,
+      "conflict_level": "EXACT",
+      "status": "LIVE",
+      "goods_class": "042",
+      "goods_description": "Software as a service (SAAS) services...",
+      "owner": "CLEAN CONNECT AI, INC.",
+      "serial_number": "98828490",
+      "filed_date": "2024-10-30T00:00:00",
+      "jurisdiction": "US"
+    }
+  ],
+  "domain_status": {
+    "available_tlds": ["io", "co", "app"],
+    "registered_tlds": ["com", "net", "org", "ai"]
+  },
+  "brand_web_metadata": {
+    "live": true,
+    "title": "Luminary | Digital agency in Australia",
+    "parked": false
+  },
+  "typosquat_domains": [
+    { "domain": "lumnary.com", "permutation_type": "typo_omission", "registered": true }
+  ],
+  "company_registrations": [
+    { "source": "gleif", "name": "Luminary Real Estate LLC", "jurisdiction": "US", "status": "lapsed" }
+  ],
+  "risk_factors": [...],
+  "latency_ms": 5316
+}
 ```
 
-Test with a clean invented name:
+### `search_trademarks`
+USPTO and/or EUIPO trademark search only. Faster than the full clearance report when you only need trademark data.
 
-```bash
-curl -s -X POST http://localhost:3000/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"check_brand_clearance","arguments":{"brand_name":"Tidewake"}}}' \
-  | jq '{score: .result.structuredContent.conflict_risk_score, hits: (.result.structuredContent.trademark_hits | length), web: .result.structuredContent.brand_web_metadata}'
-```
+**Input:** `{ "brand_name": "Luminary", "jurisdiction": "both", "nice_class": 42 }`
 
-> **Note:** `tools/call` returns `{"error":"Unauthorized"}` locally because `createContextMiddleware()` requires a valid CTX JWT. Comment it out in `server.ts` for local testing, or use the first curl (remove auth) approach above.
+### `check_domain_conflicts`
+Domain availability across 7 TLDs plus registered typosquat enumeration via RDAP.
 
-## Environment variables
+**Input:** `{ "brand_name": "Clearpath" }`
+
+### `search_company_names`
+GLEIF global entity search (2.5M+ entities, free, no key) plus Companies House if key is set.
+
+**Input:** `{ "brand_name": "Tidewake" }`
+
+## Similarity Scoring
+
+Levenshtein distance with legal-suffix stripping and Unicode normalization (NFD decompose → strip combining diacritics). "Café" and "Cafe" produce the same normalized form. Legal suffixes (Inc, LLC, Ltd, GmbH, etc.) are stripped before comparison so "Acme Inc" and "Acme LLC" are treated as the same brand.
+
+Conflict levels: EXACT (100%), HIGH (≥85%), MEDIUM (≥70%), LOW (<70%).
+
+GLEIF results use an additional prefix-boost: if the brand name appears at the start of the company name after normalization ("Luminary Real Estate LLC" starts with "luminary"), the score is raised to 75 minimum to ensure compound names surface as conflicts.
+
+## Caching
+
+In-memory Map cache with 24-hour TTL. All 6 data sources are fetched in parallel on first call per brand; subsequent calls return from cache in <10ms. `nice_class` re-weighting is applied as pure post-processing against cached raw hits — no additional fetches per class value.
+
+## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `PORT` | No (default: 3000) | Server port |
-| `NODE_ENV` | No (default: development) | Environment |
-| `EUIPO_CLIENT_ID` | No | Client ID from your registered app at dev.euipo.europa.eu. Without this, EU trademark search is skipped. |
-| `EUIPO_CLIENT_SECRET` | No | Client secret from your registered app. |
-| `EUIPO_SANDBOX` | No | Set to `"true"` to use sandbox environment during development. Sandbox returns test data only — use production for real trademark searches. |
-| `COMPANIES_HOUSE_API_KEY` | No | Free key from [Companies House developer portal](https://developer.company-information.service.gov.uk/). If absent, UK company search is skipped; OpenCorporates still runs. |
+| `PORT` | No (default 3000) | Server port |
+| `EUIPO_CLIENT_ID` | Yes (for EU trademarks) | Client ID from dev.euipo.europa.eu |
+| `EUIPO_CLIENT_SECRET` | Yes (for EU trademarks) | Client secret |
+| `EUIPO_SANDBOX` | No | Set to `"true"` for sandbox testing only |
+| `COMPANIES_HOUSE_API_KEY` | No | Free key for UK company search |
 
-### Setting up EUIPO access
+GLEIF and RDAP require no credentials. USPTO uses public endpoints with browser-style headers.
 
-1. Register a free account at `https://euipo.europa.eu/ohimportal/en/web/guest/login?loginmode=register`
-2. Log into `https://dev.euipo.europa.eu` and register an application under Apps
-3. Subscribe to **Trademark search 1.1.0** — sandbox approval is immediate, production requires submitting ID documents to `docs.apiplatform@euipo.europa.eu`
-4. Set `EUIPO_CLIENT_ID` and `EUIPO_CLIENT_SECRET` from your registered app
-5. Set `EUIPO_SANDBOX=true` during development; remove it for production
-
-## Deploy
-
-### Railway (recommended)
-
-Push to GitHub → connect repo → set `COMPANIES_HOUSE_API_KEY` env var (optional) → Railway uses `nixpacks.toml` to build and start automatically.
-
-### Hetzner CX22 (~€4/mo)
+## Running Locally
 
 ```bash
-npm run build
-node dist/server.js
+npm install
+EUIPO_CLIENT_ID=xxx EUIPO_CLIENT_SECRET=yyy npm run dev
 ```
 
-Expose via Caddy or nginx for HTTPS.
+```bash
+# Full clearance report
+curl -s -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_brand_clearance","arguments":{"brand_name":"Luminary"}}}' \
+  | python3 -c "import sys,json; r=json.load(sys.stdin)['result']['structuredContent']; print(r['conflict_risk_score'], '|', r['conflict_summary'][:100])"
 
-## Architecture
-
-```
-POST tools/call
-      ↓
-fetcher.ts:runBrandClearance(brandName)
-      ↓ parallel Promise.all (all 6 sources simultaneously)
-  ┌───────┬────────┬────────────┬──────────────┬──────────┬──────────┐
-  ↓       ↓        ↓            ↓              ↓          ↓          ↓
-uspto.ts euipo.ts domains.ts  domains.ts   companies.ts webcheck.ts
-(USPTO) (EUIPO) (7 TLD RDAP) (typosquats)  (CH + OC)  (brand.com)
-  └───────┴────────┴────────────┴──────────────┴──────────┴──────────┘
-      ↓
-similarity.ts:computeOverallRisk()
-      ↓
-BrandClearanceReport → Cache 24h → Return
+# Clean brand check
+curl -s -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"check_brand_clearance","arguments":{"brand_name":"Tidewake"}}}' \
+  | python3 -c "import sys,json; r=json.load(sys.stdin)['result']['structuredContent']; print(r['conflict_risk_score'], '|', r['conflict_summary'])"
 ```
 
-Similarity scoring uses Levenshtein distance with legal suffix stripping (Inc, LLC, Ltd, GmbH etc. stripped before comparison so "Acme Inc" matches "Acme LLC" correctly).
+## Deployment (Railway)
+
+```bash
+# Push to GitHub, connect repo in Railway
+# Set env vars: EUIPO_CLIENT_ID, EUIPO_CLIENT_SECRET
+# Optional: COMPANIES_HOUSE_API_KEY (free at developer.company-information.service.gov.uk)
+# Remove EUIPO_SANDBOX for production (sandbox returns test data only)
+```
+
+## Coverage Notes
+
+**EUIPO production:** Requires ID verification. Submit documents to docs.apiplatform@euipo.europa.eu. Sandbox credentials work for auth/structure testing but return test data, not real EU trademark records.
+
+**Company name coverage:** GLEIF covers entities with a Legal Entity Identifier — strong coverage for US and EU financial, corporate, and regulated entities. Private LLCs incorporated only at the state level without an LEI are outside GLEIF scope. No single free API provides complete US state-level company search.
+
+**Domain typosquats:** Checked at .com only for permutations (transpositions, omissions, doublings, homoglyphs, keyword variants). Up to 20 RDAP lookups per brand. Only registered variants are returned.
+
+## Not Legal Advice
+
+This tool provides factual clearance data — trademark registry records, domain registration facts, and company name data from official sources. It does not constitute legal advice. Consult a trademark attorney before making naming decisions, particularly for HIGH conflict scores.

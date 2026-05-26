@@ -16,42 +16,64 @@ interface RdapResponse {
   status?:   string[];
 }
 
+// IANA bootstrap response shape
+interface IanaBootstrap {
+  services: [string[], string[]][];
+}
+
 const PRIVACY_PATTERNS = [
   /domains by proxy/i, /whoisguard/i, /privacy protect/i,
   /contactprivacy/i, /withheld for privacy/i, /redacted for privacy/i,
   /identity protection/i, /data protected/i, /private registration/i,
 ];
 
-// ── Routing strategy ──────────────────────────────────────────────────────
-//
-// .com and .net  → Verisign registry RDAP (confirmed working, no rate limit
-//                  under load, handles the bulk of typosquat checks which are
-//                  all .com). Two-tier: Verisign first, rdap.org fallback for
-//                  domains Verisign doesn't index (older registrations via
-//                  certain registrars return 404 from registry RDAP).
-//
-// All other TLDs → rdap.org proxy directly. Avoiding guessed TLD-specific
-//                  endpoints which have been unreachable in testing (.org PIR,
-//                  .co NIC, .ai NIC, Identity Digital for .io/.app).
-//                  The 5 non-.com TLD checks per brand are well within
-//                  rdap.org limits since all high-volume .com calls go to
-//                  Verisign.
-//
-// skipFallback=true → used by typosquat checks. Typosquat candidates are
-//                     almost all genuinely unregistered; firing a rdap.org
-//                     fallback for each Verisign 404 would send 20 extra
-//                     requests per brand scan. Trust Verisign's 404 for
-//                     recently-registered squatter domains.
+// ── IANA bootstrap ────────────────────────────────────────────────────────
+// https://data.iana.org/rdap/dns.json is the canonical, IANA-maintained
+// mapping of every TLD to its authoritative RDAP server. Fetched once at
+// startup and cached for 24 hours. Falls back to rdap.org on any failure.
 
-const VERISIGN_COM = "https://rdap.verisign.com/com/v1/domain/";
-const VERISIGN_NET = "https://rdap.verisign.com/net/v1/domain/";
-const RDAP_PROXY   = "https://rdap.org/domain/";
+const IANA_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json";
+const RDAP_PROXY         = "https://rdap.org/domain/";
+const BOOTSTRAP_TTL_MS   = 24 * 60 * 60 * 1000;
 
-function primaryEndpoint(domain: string): string {
+// Seed with known-good Verisign endpoints so .com/.net work immediately
+// even before bootstrap finishes loading.
+let tldMap: Map<string, string> = new Map([
+  ["com", "https://rdap.verisign.com/com/v1/domain/"],
+  ["net", "https://rdap.verisign.com/net/v1/domain/"],
+]);
+let bootstrapLoadedAt = 0;
+
+async function loadBootstrap(): Promise<void> {
+  if (Date.now() - bootstrapLoadedAt < BOOTSTRAP_TTL_MS) return;
+  try {
+    const res  = await fetch(IANA_BOOTSTRAP_URL, { signal: AbortSignal.timeout(6_000) });
+    if (!res.ok) throw new Error(`Bootstrap HTTP ${res.status}`);
+    const data = await res.json() as IanaBootstrap;
+    const next = new Map<string, string>();
+    for (const [tlds, urls] of data.services) {
+      // IANA lists the base URL without trailing /domain/ — append it
+      const base = urls[0]?.replace(/\/$/, "") ?? "";
+      if (!base) continue;
+      const endpoint = base.endsWith("/domain") ? base + "/" : base + "/domain/";
+      for (const tld of tlds) next.set(tld.toLowerCase(), endpoint);
+    }
+    if (next.size > 0) {
+      tldMap = next;
+      bootstrapLoadedAt = Date.now();
+      console.log(`[rdap] bootstrap loaded — ${next.size} TLDs mapped`);
+    }
+  } catch (err) {
+    console.warn(`[rdap] bootstrap failed, using fallback:`, err instanceof Error ? err.message : err);
+  }
+}
+
+// Kick off bootstrap on module load (non-blocking)
+loadBootstrap().catch(() => {});
+
+function rdapEndpoint(domain: string): string {
   const tld = domain.split(".").pop()?.toLowerCase() ?? "";
-  if (tld === "com") return VERISIGN_COM + domain;
-  if (tld === "net") return VERISIGN_NET + domain;
-  return RDAP_PROXY + domain;
+  return (tldMap.get(tld) ?? RDAP_PROXY) + domain;
 }
 
 // ── Parsers ───────────────────────────────────────────────────────────────
@@ -121,18 +143,21 @@ async function fetchRdap(url: string): Promise<RdapDomainResult> {
 
 // ── Public API ────────────────────────────────────────────────────────────
 //
-// skipFallback: pass true for typosquat batch checks to avoid firing
-// a rdap.org fallback for every Verisign 404 (almost all typosquat
-// candidates are genuinely unregistered).
+// skipFallback: pass true for typosquat batch checks to avoid firing a
+// rdap.org fallback for every Verisign 404 (typosquat candidates are almost
+// all genuinely unregistered — trust the 404, don't add 20 extra calls).
 
 export async function checkDomainRdap(domain: string, skipFallback = false): Promise<RdapDomainResult> {
-  const url    = primaryEndpoint(domain);
+  // Ensure bootstrap is loaded before first real query
+  await loadBootstrap();
+
+  const url    = rdapEndpoint(domain);
   const result = await fetchRdap(url);
 
-  // Two-tier: if Verisign (.com/.net) returned clean 404, verify via rdap.org
-  // to rule out registry RDAP coverage gaps before reporting "available".
-  // Not applied for typosquat checks (skipFallback=true) to avoid 20 extra
-  // rdap.org calls per scan.
+  // Two-tier for Verisign (.com/.net): some older registrations are only
+  // indexed at the registrar level, not the registry level — Verisign returns
+  // 404 even though the domain is live. Verify with rdap.org before reporting
+  // "available". Not applied for typosquat checks (skipFallback=true).
   const isVerisign = url.includes("verisign");
   if (isVerisign && !result.registered && !result.error && !skipFallback) {
     return fetchRdap(RDAP_PROXY + domain);

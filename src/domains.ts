@@ -151,38 +151,52 @@ export async function checkDomainAvailability(
   const results = await Promise.allSettled(
     domainList.map(async ({ domain, tld }) => {
       const r = await checkDomainRdap(domain);
-      return { domain, tld, ...r } as DomainRegistration & { tld: string };
+      // Keep RdapDomainResult fields (including error) alongside domain/tld
+      return { domain, tld, rdap: r };
     })
   );
 
+  const rdapErrors: string[] = [];
+
   const checked: DomainRegistration[] = results.map((r, i) => {
     if (r.status === "fulfilled") {
+      const { domain, tld, rdap } = r.value;
+      if (rdap.error) {
+        rdapErrors.push(`${domain}: ${rdap.error}`);
+      }
       return {
-        domain: r.value.domain,
-        tld: tlds[i],
-        registered: r.value.registered,
-        registrar: r.value.registrar,
-        registered_at: r.value.registered_at,
-        expires_at: r.value.expires_at,
-        privacy_protected: r.value.privacy_protected,
+        domain,
+        tld,
+        registered:        rdap.error ? false : rdap.registered,
+        registrar:         rdap.registrar,
+        registered_at:     rdap.registered_at,
+        expires_at:        rdap.expires_at,
+        privacy_protected: rdap.privacy_protected,
       };
     }
+    rdapErrors.push(`${domainList[i].domain}: lookup rejected`);
     return {
-      domain: domainList[i].domain,
-      tld: tlds[i],
-      registered: false,
-      registrar: null,
-      registered_at: null,
-      expires_at: null,
+      domain:            domainList[i].domain,
+      tld:               tlds[i],
+      registered:        false,
+      registrar:         null,
+      registered_at:     null,
+      expires_at:        null,
       privacy_protected: false,
     };
   });
 
+  // Only count domains as "available" if the RDAP check actually succeeded (no error)
+  const successfulChecks = checked.filter((_, i) => {
+    const r = results[i];
+    return r.status === "fulfilled" && !(r as PromiseFulfilledResult<{rdap: {error: string|null}}>).value.rdap.error;
+  });
+
   return {
     checked_domains: checked,
-    available_tlds:  checked.filter(d => !d.registered).map(d => d.tld),
+    available_tlds:  successfulChecks.filter(d => !d.registered).map(d => d.tld),
     registered_tlds: checked.filter(d => d.registered).map(d => d.tld),
-    error: null,
+    error: rdapErrors.length > 0 ? `RDAP check failed for: ${rdapErrors.join("; ")}` : null,
   };
 }
 
@@ -201,7 +215,7 @@ export async function checkTyposquats(brandName: string): Promise<TyposquatDomai
   const results = await Promise.allSettled(
     prioritized.map(async c => {
       const domain = `${c.name}.com`; // check .com only for permutations
-      const rdap = await checkDomainRdap(domain);
+      const rdap = await checkDomainRdap(domain, true); // skipFallback — typosquats are almost all unregistered, avoid 20 extra rdap.org calls
       return {
         domain,
         permutation_type: c.type,

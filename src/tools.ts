@@ -25,7 +25,7 @@ const DOMAIN_REGISTRATION_SCHEMA = {
   properties: {
     domain:            { type: "string" },
     tld:               { type: "string" },
-    registered:        { type: "boolean" },
+    registered:        { type: ["boolean", "null"], description: "true=registered, false=available, null=RDAP check failed — do not interpret null as available" },
     registrar:         { type: ["string", "null"] },
     registered_at:     { type: ["string", "null"] },
     expires_at:        { type: ["string", "null"] },
@@ -111,6 +111,8 @@ const FULL_REPORT_SCHEMA = {
     risk_factors:          { type: "array", items: RISK_FACTOR_SCHEMA },
     data_freshness:        { type: "string", format: "date-time" },
     latency_ms:            { type: "number" },
+    trademark_total:       { type: "number", description: "Total trademark hits found across all statuses. Active (LIVE/REGISTERED/PENDING) hits are returned in trademark_hits; use search_trademarks for full history including dead marks." },
+    trademark_active:      { type: "number", description: "Number of active (LIVE/REGISTERED/PENDING) trademark hits found." },
   },
   required: ["brand_name","normalized_name","conflict_risk_score","conflict_summary","trademark_hits","domain_status","brand_web_metadata","typosquat_domains","company_registrations","risk_factors","data_freshness","latency_ms"],
 };
@@ -131,6 +133,8 @@ export const TOOLS = [
       "Similarity scoring uses Levenshtein distance with legal-suffix stripping and Unicode normalization.",
       "Optional nice_class (Nice classification number, e.g. 42) re-weights trademark hits:",
       "hits in a different goods/services class are downgraded one conflict level.",
+      "Returns lean response by default: only LIVE/REGISTERED/PENDING marks (up to 10), descriptions capped at 150 chars, top 5 companies, top 10 typosquats.",
+      "trademark_total and trademark_active show full counts. Use search_trademarks for complete history.",
       "Replaces Trademarkia ($199/search) and LegalZoom Brand Protection ($299–$750/clearance).",
       "Not legal advice — factual clearance data to inform attorney review.",
     ].join(" "),

@@ -29,8 +29,35 @@ async function handleTool(name: string, args: Record<string, unknown>) {
   if (!brandName) throw new Error("brand_name is required");
 
   switch (name) {
-    case "check_brand_clearance":
-      return runBrandClearance(brandName, args.nice_class as number | undefined);
+    case "check_brand_clearance": {
+      const niceClass = args.nice_class as number | undefined;
+      const full      = await runBrandClearance(brandName, niceClass);
+
+      // Return a lean response for check_brand_clearance to keep synthesis fast:
+      // - Only LIVE/REGISTERED/PENDING marks (DEAD marks are historical — not actionable)
+      // - Goods descriptions capped at 150 chars
+      // - Company registrations capped at 5 (sorted by similarity already)
+      // - Typosquats capped at 10 (registered only, most dangerous first)
+      // - trademark_total and trademark_active added so agents know there's more
+      // Full data is still available via search_trademarks / search_company_names.
+      const activeHits = full.trademark_hits.filter(
+        h => h.status === "LIVE" || h.status === "REGISTERED" || h.status === "PENDING",
+      );
+
+      return {
+        ...full,
+        trademark_hits: activeHits.slice(0, 10).map(h => ({
+          ...h,
+          goods_description: h.goods_description
+            ? h.goods_description.slice(0, 150) + (h.goods_description.length > 150 ? "…" : "")
+            : null,
+        })),
+        trademark_total:  full.trademark_hits.length,
+        trademark_active: activeHits.length,
+        company_registrations: full.company_registrations.slice(0, 5),
+        typosquat_domains:     full.typosquat_domains.slice(0, 10),
+      };
+    }
 
     case "search_trademarks": {
       const niceClass   = args.nice_class as number | undefined;
@@ -104,7 +131,11 @@ app.use((req, _res, next) => {
   next();
 });
 
-app.use("/mcp", createContextMiddleware());
+if (process.env.NODE_ENV === "production") {
+  app.use("/mcp", createContextMiddleware());
+} else {
+  console.warn("[warn] CTX middleware DISABLED (NODE_ENV !== production)");
+}
 
 // ── SSE sessions ───────────────────────────────────────────────────────────
 

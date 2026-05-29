@@ -167,7 +167,8 @@ export async function checkDomainAvailability(
       return {
         domain,
         tld,
-        registered:        rdap.error ? false : rdap.registered,
+        // null = check failed (timeout/network error) — NOT the same as unregistered
+        registered:        rdap.error ? null : rdap.registered,
         registrar:         rdap.registrar,
         registered_at:     rdap.registered_at,
         expires_at:        rdap.expires_at,
@@ -178,7 +179,7 @@ export async function checkDomainAvailability(
     return {
       domain:            domainList[i].domain,
       tld:               tlds[i],
-      registered:        false,
+      registered:        null,  // rejected promise = check failed, not unregistered
       registrar:         null,
       registered_at:     null,
       expires_at:        null,
@@ -194,8 +195,8 @@ export async function checkDomainAvailability(
 
   return {
     checked_domains: checked,
-    available_tlds:  successfulChecks.filter(d => !d.registered).map(d => d.tld),
-    registered_tlds: checked.filter(d => d.registered).map(d => d.tld),
+    available_tlds:  successfulChecks.filter(d => d.registered === false).map(d => d.tld),
+    registered_tlds: checked.filter(d => d.registered === true).map(d => d.tld),
     error: rdapErrors.length > 0 ? `RDAP check failed for: ${rdapErrors.join("; ")}` : null,
   };
 }

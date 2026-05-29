@@ -67,7 +67,7 @@ export interface DomainStatus {
 export interface DomainRegistration {
   domain: string;
   tld: string;
-  registered: boolean;
+  registered: boolean | null;  // null = RDAP check failed (timeout/error) — do NOT interpret as available
   registrar: string | null;
   registered_at: string | null;
   expires_at: string | null;

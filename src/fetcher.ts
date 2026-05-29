@@ -55,16 +55,21 @@ export async function runBrandClearance(rawName: string, niceClass?: number): Pr
   }
 
   const t0 = Date.now();
+  const mark = (label: string) => {
+    const ms = Date.now() - t0;
+    console.log(`[clearance:timing] ${label.padEnd(12)} ${ms}ms | brand="${brand}"`);
+    return ms;
+  };
 
-  // All 6 data sources fire in parallel
+  // All 6 data sources fire in parallel — log when each completes
   const [usptoResult, euipoResult, domainResult, typosquatResult, companyResult, webMetadata] =
     await Promise.all([
-      searchUsptoTrademarks(brand, 20),
-      searchEuipoTrademarks(brand, 20),
-      checkDomainAvailability(brand),
-      checkTyposquats(brand),
-      searchCompanyRegistrations(brand, 10),
-      fetchBrandWebMetadata(brand),
+      searchUsptoTrademarks(brand, 20).then(r  => { mark("uspto");      return r; }),
+      searchEuipoTrademarks(brand, 20).then(r  => { mark("euipo");      return r; }),
+      checkDomainAvailability(brand).then(r    => { mark("domains");    return r; }),
+      checkTyposquats(brand).then(r            => { mark("typosquats"); return r; }),
+      searchCompanyRegistrations(brand, 10).then(r => { mark("companies"); return r; }),
+      fetchBrandWebMetadata(brand).then(r      => { mark("webmeta");    return r; }),
     ]);
 
   const rawTrademarkHits: TrademarkHit[] = [
@@ -96,6 +101,11 @@ export async function runBrandClearance(rawName: string, niceClass?: number): Pr
   };
 
   cache.set(baseKey, report, TTL_MS);
+
+  const totalMs    = Date.now() - t0;
+  const payloadB   = JSON.stringify(report).length;
+  const tmHits     = rawTrademarkHits.length;
+  console.log(`[clearance:done] total=${totalMs}ms | payload=${payloadB}B (${(payloadB/1024).toFixed(1)}KB) | trademark_hits=${tmHits} | brand="${brand}"`);
 
   // Apply nice_class on the way out without mutating the cached version
   return niceClass !== undefined ? applyNiceClass(report, niceClass) : report;
